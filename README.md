@@ -1,5 +1,5 @@
 
-Swapodopolis is my propriery financial library
+Example showing how to simulation browian motion, and other processes in C++
 
 
 ![GitHub Logo](GithubAssets/RiskNeutralBrownianMotion.png)
