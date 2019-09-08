@@ -715,11 +715,22 @@ struct Union{
         template<class... Args>
         Union(Args&&... args):children{args...}{}
 
+        void Add(Union const& that){
+                for(auto const& _ : that.children)
+                        children.push_back(_);
+        }
+
         std::vector<BorelSet> children;
 };
 struct Intersection{
         template<class... Args>
         Intersection(Args&&... args):children{args...}{}
+
+        void Add(Intersection const& that){
+                for(auto const& _ : that.children)
+                        children.push_back(_);
+        }
+
         std::vector<BorelSet> children;
 };
 struct IntervalEndPoint{
@@ -728,6 +739,12 @@ struct IntervalEndPoint{
 
         IntervalEndPoint Switch()const{ return IntervalEndPoint{ ! is_open, point }; }
 };
+IntervalEndPoint Open(double x){
+        return IntervalEndPoint{true, x};
+}
+IntervalEndPoint Closed(double x){
+        return IntervalEndPoint{false, x};
+}
 struct Interval{
         IntervalEndPoint left;
         IntervalEndPoint right;
@@ -754,14 +771,14 @@ struct Interval{
                 if( left.point > right.point )
                         return result;
 
-                if( 0.0 == left.point && ! left.is_open ){
+                if( 0.0 == left.point && left.is_open ){
                         result.children.push_back(Interval::Closed(0.0, 0.0));
                 } else if( 0.0 < left.point ){
                         result.children.push_back(Interval{ IntervalEndPoint{false, 0.0}, 
                                                    left.Switch() } );
                 }
 
-                if( 1.0 == right.point && ! right.is_open ){
+                if( 1.0 == right.point && right.is_open ){
                         result.children.push_back(Interval::Closed(1.0, 1.0));
                 } else if( right.point < 1.0 ){
                         result.children.push_back(Interval{ right.Switch(),       
@@ -771,36 +788,25 @@ struct Interval{
                 return result;
         }
 
+        bool IsSubsetOf(Interval const& that)const{
+                if( that.left.point > left.point )
+                        return false;
+                if( that.left.point ==left.point ){
+                        if( that.left.is_open != left.is_open && that.left.is_open )
+                                return false;
+                }
+                if( that.right.point < right.point )
+                        return false;
+                if( that.right.point ==right.point ){
+                        if( that.right.is_open != right.is_open && that.right.is_open )
+                                return false;
+                }
+                return true;
+        }
+
 };
 
 
-#if 0
-Union ToIntervals(BorelSet const& b){
-        struct ToIntervalsImpl : boost::static_visitor<Union>{
-                Union operator()(Omega const&)const{
-                        return Union{Interval::Closed(0,1)};
-                }
-                Union operator()(Nul const&)const{
-                        return Union{};
-                }
-                Union operator()(Not const& obj)const{
-                        auto aux = 
-                        Union sub = boost::apply_visitor(obj.child, *this);
-                        Union result;
-                        for(auto const& i : sub ){
-                                auto ptr = boost::get<Interval>(&i);
-                                BOOST_ASSER(ptr);
-
-                                if( ptr.left > 0.0 ){
-
-                                }
-                        }
-                }
-        };
-
-        //return boost::apply_visitor(ToIntervalsImpl());
-}
-#endif
 
 std::string ToString(BorelSet const& b){
         struct ToStringImpl{
@@ -852,11 +858,145 @@ void Display(BorelSet const& b){
 }
 
 
+Union ToIntervals(BorelSet const& b){
+        struct ToIntervalsImpl : boost::static_visitor<Union>{
+                Union operator()(Omega const&)const{
+                        return Union{Interval::Closed(0,1)};
+                }
+                Union operator()(Nul const&)const{
+                        return Union{};
+                }
+                Union operator()(Not const& obj)const{
+                        Union result;
+                        for(auto const& i : boost::apply_visitor(*this, obj.child).children ){
+                                auto ptr = boost::get<Interval>(&i);
+                                BOOST_ASSERT(ptr);
+
+                                result.Add( ptr->Not() );
+                        }
+                        return result;
+                }
+                Union operator()(Union const& obj)const{
+                        Union mapped;
+                        for(auto const& _ : obj.children ){
+                                for( auto const& inner : boost::apply_visitor(*this,_).children ){
+                                        mapped.children.push_back(inner);
+                                }
+                        }
+                        std::vector<Interval const*> subs;
+                        for(auto const& _ : mapped.children ){
+                                auto ptr = boost::get<Interval>(&_);
+                                BOOST_ASSERT(ptr);
+                                subs.push_back(ptr);
+                        }
+                        boost::sort( subs, [](auto const& l, auto const& r){
+                                if( l->left.point != r->left.point )
+                                        return l->left.point < r->left.point;
+                                // prefer closed
+                                return l->left.is_open < r->left.is_open;
+                        });
+
+                        Union result;
+                        size_t iter = 0;
+                        for(;iter!=subs.size();){
+                                if( subs[iter] == 0 )
+                                        continue;
+
+                                // for debugging
+                                std::vector<Interval const*> dbg_path;
+                                dbg_path.push_back(subs[iter]);
+
+                                IntervalEndPoint left  = subs[iter]->left;
+                                IntervalEndPoint right = subs[iter]->right;
+                                // what is the largest path we can construct
+                                subs[iter] = 0;
+                                ++iter;
+                                for(size_t j=iter;j!=subs.size();){
+                                        if( subs[j] == 0 )
+                                                continue;
+                                        auto head = subs[j];
+
+                                        // do these overlap?
+                                        if( head->left.point < right.point ||
+                                           (head->left.point ==right.point && !head->left.is_open && !right.is_open) ){
+
+                                                // now can we extend right?
+                                                if( right.point < head->right.point ||
+                                                   (right.is_open && !head->right.is_open ) ){
+                                                        right = head->right;
+                                                        dbg_path.push_back(head);
+                                                        // restart nice and slow
+                                                        j = iter;
+                                                        continue;
+                                                }
+                                        }
+                                        ++j;
+                                }
+                                Interval i{left, right};
+
+                                for(size_t j=iter;j!=subs.size();++j){
+                                        if( subs[j] == 0 )
+                                                continue;
+                                        if( subs[j]->IsSubsetOf(i) ){
+                                                subs[j] = 0;
+                                        }
+                                }
+
+                                std::cout << "dbg_path.size() = " << dbg_path.size() << "\n";
+
+                                result.children.push_back(i);
+
+                        }
+
+                        return result;
+                }
+                Union operator()(Intersection const& obj)const{
+                        if( obj.children.empty() )
+                                return Union{};
+                        Union mapped;
+                        for(auto const& _ : obj.children )
+                                mapped.children.push_back(boost::apply_visitor(*this,_));
+
+                        auto first = boost::get<Interval>(&mapped.children[0]);
+                        BOOST_ASSERT(first);
+
+                        IntervalEndPoint const* upper_left  = &first->left;
+                        IntervalEndPoint const* lower_right = &first->right;
+
+
+                        for(auto const& i : mapped.children ){
+                                auto ptr = boost::get<Interval>(&i);
+                                BOOST_ASSERT(ptr);
+
+                                if( upper_left->point < ptr->left.point )
+                                        upper_left = &ptr->left;
+                                else if(  upper_left->point == ptr->left.point && 
+                                          upper_left->is_open && 
+                                          ! ptr->left.is_open )
+                                        upper_left = &ptr->left;
+                        }
+
+                        return Union{};
+                        
+                }
+                Union operator()(Interval const& i)const{
+                        return Union{i};
+                }
+        };
+
+        return boost::apply_visitor(ToIntervalsImpl(), b);
+}
+
+
 int main(){
 
-        BorelSet b = Not{ Interval::Closed(0, 0.5) };
+        BorelSet b = Union{ Interval{ Closed(0.0 ), Open(0.25) },
+                            Interval{ Closed(0.25), Open(0.50) } };
         Display(b);
+
         
+        Display(ToIntervals(b));
+
 
         //example_0();
         //example_1();
