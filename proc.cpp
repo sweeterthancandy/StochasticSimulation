@@ -1,6 +1,7 @@
 #include <cmath>
 #include <memory>
 #include <fstream>
+#include <set>
 #include <numeric>
 #include <random>
 #include <iostream>
@@ -739,6 +740,17 @@ struct IntervalEndPoint{
                 ostr << ", point = " << self.point << "}";
                 return ostr;
         }
+        bool operator<(IntervalEndPoint const& that)const{
+                if( point != that.point )
+                        return point < that.point;
+                return is_open < that.is_open;
+        }
+        bool operator==(IntervalEndPoint const& that)const{
+                return point == that.point && is_open == that.is_open;
+        }
+        bool operator!=(IntervalEndPoint const& that)const{
+                return ! operator==(that);
+        }
         bool is_open;
         double point;
 
@@ -750,6 +762,44 @@ IntervalEndPoint Open(double x){
 IntervalEndPoint Closed(double x){
         return IntervalEndPoint{false, x};
 }
+
+struct IntervalUnion{
+        template<class... Args>
+        IntervalUnion(Args&&... args):children{args...}{}
+        
+        void Add(IntervalUnion const& that){
+                for(auto const& _ : that.children)
+                        children.push_back(_);
+        }
+
+        std::vector<Interval> children;
+
+        operator Union()const{
+                return AsUnion();
+        }
+        Union AsUnion()const{
+                Union tmp;
+                for(auto const& _ : children )
+                        tmp.children.push_back(_);
+                return tmp;
+        }
+
+        #if 0
+        bool operator==(IntervalUnion const& that)const{
+                return children == that.children;
+        }
+        bool operator!=(IntervalUnion const& that)const{
+                return ! operator==(that);
+        }
+        #endif
+        bool operator<(IntervalUnion const& that)const{
+                if( children.size() != that.children.size() ){
+                        return  children.size() < that.children.size();
+                }
+                return children < that.children;
+        }
+};
+
 struct Interval{
         IntervalEndPoint left;
         IntervalEndPoint right;
@@ -763,9 +813,16 @@ struct Interval{
                                  IntervalEndPoint{ false, y} };
         }
 
+        bool operator<(Interval const& that)const{
+                if( left != that.left )
+                        return left < that.left;
+                return right < that.right;
+        }
+
+
         // homogenous operations are here
-        Union Not()const{
-                Union result;
+        IntervalUnion Not()const{
+                IntervalUnion result;
 
                 /*
                         A) this  \subset world => this
@@ -787,7 +844,7 @@ struct Interval{
                         result.children.push_back(Interval::Closed(1.0, 1.0));
                 } else if( right.point < 1.0 ){
                         result.children.push_back(Interval{ right.Switch(),       
-                                                   IntervalEndPoint{false, 0.0} } );
+                                                   IntervalEndPoint{false, 1.0} } );
                 }
 
                 return result;
@@ -812,6 +869,25 @@ struct Interval{
 };
 
 
+
+
+struct SortIntervalUnions{
+        bool operator()(Union const& a, Union const& b)const{
+                if( a.children.size() != b.children.size() )
+                        return a.children.size() < b.children.size();
+                for(size_t idx=0;idx!=a.children.size();++idx){
+                        auto a_interval = boost::get<Interval>(&a.children[idx]);
+                        auto b_interval = boost::get<Interval>(&b.children[idx]);
+                        BOOST_ASSERT( a_interval );
+                        BOOST_ASSERT( b_interval );
+                        if( a_interval->left != b_interval->left )
+                                return  a_interval->left < b_interval->left;
+                        if( a_interval->right != b_interval->right )
+                                return  a_interval->right < b_interval->right;
+                }
+                return false;
+        }
+};
 
 std::string ToString(BorelSet const& b){
         struct ToStringImpl{
@@ -863,26 +939,24 @@ void Display(BorelSet const& b){
 }
 
 
-Union ToIntervals(BorelSet const& b){
-        struct ToIntervalsImpl : boost::static_visitor<Union>{
-                Union operator()(Omega const&)const{
-                        return Union{Interval::Closed(0,1)};
-                }
-                Union operator()(Nul const&)const{
-                        return Union{};
-                }
-                Union operator()(Not const& obj)const{
-                        Union result;
-                        for(auto const& i : boost::apply_visitor(*this, obj.child).children ){
-                                auto ptr = boost::get<Interval>(&i);
-                                BOOST_ASSERT(ptr);
 
-                                result.Add( ptr->Not() );
+IntervalUnion ToIntervals(BorelSet const& b){
+        struct ToIntervalsImpl : boost::static_visitor<IntervalUnion>{
+                IntervalUnion operator()(Omega const&)const{
+                        return IntervalUnion{Interval::Closed(0,1)};
+                }
+                IntervalUnion operator()(Nul const&)const{
+                        return IntervalUnion{};
+                }
+                IntervalUnion operator()(Not const& obj)const{
+                        IntervalUnion result;
+                        for(auto const& i : boost::apply_visitor(*this, obj.child).children ){
+                                result.Add( i.Not() );
                         }
                         return result;
                 }
-                Union operator()(Union const& obj)const{
-                        Union mapped;
+                IntervalUnion operator()(Union const& obj)const{
+                        IntervalUnion mapped;
                         for(auto const& _ : obj.children ){
                                 for( auto const& inner : boost::apply_visitor(*this,_).children ){
                                         mapped.children.push_back(inner);
@@ -890,9 +964,7 @@ Union ToIntervals(BorelSet const& b){
                         }
                         std::vector<Interval const*> subs;
                         for(auto const& _ : mapped.children ){
-                                auto ptr = boost::get<Interval>(&_);
-                                BOOST_ASSERT(ptr);
-                                subs.push_back(ptr);
+                                subs.push_back(&_);
                         }
                         boost::sort( subs, [](auto const& l, auto const& r){
                                 if( l->left.point != r->left.point )
@@ -901,8 +973,7 @@ Union ToIntervals(BorelSet const& b){
                                 return l->left.is_open < r->left.is_open;
                         });
 
-                        std::cout << "subs.size() = " << subs.size() << "\n";
-                        Union result;
+                        IntervalUnion result;
                         size_t iter = 0;
                         for(;iter!=subs.size();++iter){
                                 if( subs[iter] == 0 )
@@ -933,7 +1004,6 @@ Union ToIntervals(BorelSet const& b){
                                                         right = head->right;
                                                         dbg_path.push_back(head);
                                                         // restart nice and slow
-                                                        std::cout << "iter = " << iter << "\n";
                                                         j = iter+1;
                                                         continue;
                                                 }
@@ -946,12 +1016,10 @@ Union ToIntervals(BorelSet const& b){
                                         if( subs[j] == 0 )
                                                 continue;
                                         if( subs[j]->IsSubsetOf(i) ){
-                                                std::cout << ToString(*subs[j]) << " \\subset " << ToString(i) << "\n";
                                                 subs[j] = 0;
                                         }
                                 }
 
-                                std::cout << "dbg_path.size() = " << dbg_path.size() << "\n";
 
                                 result.children.push_back(i);
 
@@ -959,10 +1027,10 @@ Union ToIntervals(BorelSet const& b){
 
                         return result;
                 }
-                Union operator()(Intersection const& obj)const{
+                IntervalUnion operator()(Intersection const& obj)const{
                         if( obj.children.empty() )
-                                return Union{};
-                        Union mapped;
+                                return IntervalUnion{};
+                        IntervalUnion mapped;
                         for(auto const& _ : obj.children ){
                                 for(auto const& inner : boost::apply_visitor(*this,_).children ){
                                         mapped.children.push_back(inner);
@@ -970,16 +1038,14 @@ Union ToIntervals(BorelSet const& b){
                         }
 
 
-                        auto first = boost::get<Interval>(&mapped.children[0]);
-                        BOOST_ASSERT(first);
+                        auto first = &mapped.children.at(0);
 
                         IntervalEndPoint const* upper_left  = &first->left;
                         IntervalEndPoint const* lower_right = &first->right;
 
 
                         for(auto const& i : mapped.children ){
-                                auto ptr = boost::get<Interval>(&i);
-                                BOOST_ASSERT(ptr);
+                                auto ptr = &i;
 
                                 if( upper_left->point < ptr->left.point )
                                         upper_left = &ptr->left;
@@ -1000,34 +1066,126 @@ Union ToIntervals(BorelSet const& b){
                         std::cout << "*upper_left = " << *upper_left << "\n";
                         std::cout << "*lower_right = " << *lower_right << "\n";
 
-                        if( upper_left->point <= lower_right->point ||
+                        if( upper_left->point <  lower_right->point ||
                             ( upper_left->point == lower_right->point 
                               && ! upper_left->is_open && ! lower_right->is_open ) ){
-                                return Union{ Interval{ *upper_left, *lower_right} };
+                                return IntervalUnion{ Interval{ *upper_left, *lower_right} };
                         }
 
-                        return Union{};
+                        return IntervalUnion{};
                         
                 }
-                Union operator()(Interval const& i)const{
-                        return Union{i};
+                IntervalUnion operator()(Interval const& i)const{
+                        return IntervalUnion{i};
                 }
         };
 
-        return boost::apply_visitor(ToIntervalsImpl(), b);
+        auto tmp = boost::apply_visitor(ToIntervalsImpl(), b);
+        boost::sort(tmp.children);
+        return tmp;
 }
 
+struct BorelFamily : std::vector<BorelSet>{
+        using impl_type = std::vector<BorelSet>;
+        template<class... Args>
+        BorelFamily(Args&&... args):impl_type{args...}{}
+        friend std::ostream& operator<<(std::ostream& ostr, BorelFamily const& self){
+                ostr << "{";
+                for(size_t idx=0;idx!=self.size();++idx){
+                        ostr << ( idx == 0 ? "" : ", " ) << ToString(self[idx]);
+                }
+                return ostr << "}";
+        }
+        void Display(std::ostream& out)const{
+                for(size_t idx=0;idx!=size();++idx){
+                        out << "    " << std::setw(2) << idx << " : " << ToString(at(idx)) << "\n";
+                }
+        }
+};
+
+#if 1
+BorelFamily GenerateSigmaAlgebra(BorelFamily const& family){
+        BorelFamily head = family;
+        std::vector<BorelSet> to_add;
+
+
+        std::set<IntervalUnion> interval_set;
+        for(auto const& _ : family ){
+                interval_set.insert( ToIntervals(_) );
+        }
+
+        auto test = [&](BorelSet const& b){
+                auto iu = ToIntervals(b);
+                if( ! interval_set.count( iu ) ){
+                        std::cout << "====== found new ======\n";
+                        std::cout << "    b  = " << ToString(b) << "\n";
+                        std::cout << "    iu = " << ToString(iu.AsUnion()) << "\n";
+
+                        to_add.push_back(b);
+                        interval_set.insert( iu );
+                        return 1;
+                }
+                return 0;
+        };
+
+        for(;;){
+                int changes = 0;
+                for(auto const& _ : head ){
+                        auto complement = Not{_};
+                        changes += test(complement);
+                }
+                for(size_t i=0;i+1<head.size();++i){
+                        for(size_t j=i+1;j<head.size();++j){
+                                auto u = Union{ head[i], head[j] };
+                                changes += test(u);
+                        }
+                }
+                if( changes == 0 )
+                        break;
+                for(auto const& _ : to_add )
+                        head.push_back(_);
+                //break;
+        }
+
+        BorelFamily result;
+        for(auto const& _ : interval_set ){
+                result.push_back( _.AsUnion() );
+        }
+        return result;
+
+
+
+        return head;
+
+}
+#endif
 
 int main(){
 
         BorelSet b = Intersection{ Interval{ Closed(0.0 ), Closed(0.25) },
                             Interval{ Open(0.25), Open(0.50) },
-                            Interval{ Closed(0.26), Closed(0.6) } };
+                            Interval{ Closed(0.1), Closed(0.6) } };
         Display(b);
 
-        
-        Display(ToIntervals(b));
 
+        
+        Display(ToIntervals(b).AsUnion());
+        
+        BorelFamily f0{ Omega(), Nul() };
+        std::cout << "f0 = " << f0 << "\n";
+        BorelFamily f1{ Omega(), Nul(),
+                        Interval{ Closed(0.0), Open(0.5) },
+                        Interval{ Closed(0.5), Closed(1.0) } };
+        std::cout << "f1 = " << f1 << "\n";
+        BorelFamily f2{ Omega(), Nul(),
+                        Interval{ Closed(0.0), Open(0.25) },
+                        Interval{ Closed(0.25), Open(0.50) },
+                        Interval{ Closed(0.50), Open(0.75) },
+                        Interval{ Closed(0.75), Closed(1.0) } };
+        std::cout << "f2 = " << f2 << "\n";
+
+        std::cout << "GenerateSigmaAlgebra(f2):\n";
+        GenerateSigmaAlgebra(f2).Display(std::cout);
 
         //example_0();
         //example_1();
