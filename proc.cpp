@@ -949,11 +949,11 @@ IntervalUnion ToIntervals(BorelSet const& b){
                         return IntervalUnion{};
                 }
                 IntervalUnion operator()(Not const& obj)const{
-                        IntervalUnion result;
+                        Union result;
                         for(auto const& i : boost::apply_visitor(*this, obj.child).children ){
-                                result.Add( i.Not() );
+                                result.Add( i.Not().AsUnion() );
                         }
-                        return result;
+                        return operator()(result);
                 }
                 IntervalUnion operator()(Union const& obj)const{
                         IntervalUnion mapped;
