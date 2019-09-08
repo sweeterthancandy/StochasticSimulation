@@ -898,7 +898,7 @@ Union ToIntervals(BorelSet const& b){
 
                         Union result;
                         size_t iter = 0;
-                        for(;iter!=subs.size();){
+                        for(;iter!=subs.size();++iter){
                                 if( subs[iter] == 0 )
                                         continue;
 
@@ -912,20 +912,23 @@ Union ToIntervals(BorelSet const& b){
                                 subs[iter] = 0;
                                 ++iter;
                                 for(size_t j=iter;j!=subs.size();){
-                                        if( subs[j] == 0 )
+                                        if( subs[j] == 0 ){
+                                                ++j;
                                                 continue;
+                                        }
                                         auto head = subs[j];
 
                                         // do these overlap?
                                         if( head->left.point < right.point ||
-                                           (head->left.point ==right.point && !head->left.is_open && !right.is_open) ){
+                                           (head->left.point ==right.point && ! (head->left.is_open && right.is_open) ) ){
 
                                                 // now can we extend right?
                                                 if( right.point < head->right.point ||
-                                                   (right.is_open && !head->right.is_open ) ){
+                                                   (right.point ==head->right.point && right.is_open && !head->right.is_open ) ){
                                                         right = head->right;
                                                         dbg_path.push_back(head);
                                                         // restart nice and slow
+                                                        std::cout << "iter = " << iter << "\n";
                                                         j = iter;
                                                         continue;
                                                 }
