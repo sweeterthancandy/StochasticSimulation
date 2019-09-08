@@ -8,6 +8,9 @@
 #include <CandyPretty/CandyPretty.h>
 
 #include <boost/exception/all.hpp>
+#include <boost/variant.hpp>
+
+#if 0
 
 /*
                 D(t)V(t) = E~(D(T)V(T)|F(T))
@@ -687,10 +690,179 @@ void example_2(){
         renderer.Emit();
 }
 
+#endif
+
+struct Omega{};
+struct Nul{};
+struct Not;
+struct Union;
+struct Intersection;
+struct Interval;
+
+using BorelSet = boost::variant<
+        Omega,
+        Nul,
+        boost::recursive_wrapper<Not>,
+        boost::recursive_wrapper<Union>,
+        boost::recursive_wrapper<Intersection>,
+        boost::recursive_wrapper<Interval>
+>;
+
+struct Not{
+        BorelSet child;
+};
+struct Union{
+        template<class... Args>
+        Union(Args&&... args):children{args...}{}
+
+        std::vector<BorelSet> children;
+};
+struct Intersection{
+        template<class... Args>
+        Intersection(Args&&... args):children{args...}{}
+        std::vector<BorelSet> children;
+};
+struct IntervalEndPoint{
+        bool is_open;
+        double point;
+
+        IntervalEndPoint Switch()const{ return IntervalEndPoint{ ! is_open, point }; }
+};
+struct Interval{
+        IntervalEndPoint left;
+        IntervalEndPoint right;
+
+        static Interval Closed(double x, double y){
+                return Interval{ IntervalEndPoint{ false, x},
+                                 IntervalEndPoint{ false, y} };
+        }
+        static Interval Open(double x, double y){
+                return Interval{ IntervalEndPoint{ false, x},
+                                 IntervalEndPoint{ false, y} };
+        }
+
+        // homogenous operations are here
+        Union Not()const{
+                Union result;
+
+                /*
+                        A) this  \subset world => this
+                        B) world \subset this => that
+
+                 */
+
+                if( left.point > right.point )
+                        return result;
+
+                if( 0.0 == left.point && ! left.is_open ){
+                        result.children.push_back(Interval::Closed(0.0, 0.0));
+                } else if( 0.0 < left.point ){
+                        result.children.push_back(Interval{ IntervalEndPoint{false, 0.0}, 
+                                                   left.Switch() } );
+                }
+
+                if( 1.0 == right.point && ! right.is_open ){
+                        result.children.push_back(Interval::Closed(1.0, 1.0));
+                } else if( right.point < 1.0 ){
+                        result.children.push_back(Interval{ right.Switch(),       
+                                                   IntervalEndPoint{false, 0.0} } );
+                }
+
+                return result;
+        }
+
+};
+
+
+#if 0
+Union ToIntervals(BorelSet const& b){
+        struct ToIntervalsImpl : boost::static_visitor<Union>{
+                Union operator()(Omega const&)const{
+                        return Union{Interval::Closed(0,1)};
+                }
+                Union operator()(Nul const&)const{
+                        return Union{};
+                }
+                Union operator()(Not const& obj)const{
+                        auto aux = 
+                        Union sub = boost::apply_visitor(obj.child, *this);
+                        Union result;
+                        for(auto const& i : sub ){
+                                auto ptr = boost::get<Interval>(&i);
+                                BOOST_ASSER(ptr);
+
+                                if( ptr.left > 0.0 ){
+
+                                }
+                        }
+                }
+        };
+
+        //return boost::apply_visitor(ToIntervalsImpl());
+}
+#endif
+
+std::string ToString(BorelSet const& b){
+        struct ToStringImpl{
+                void operator()(Omega const&){
+                        ostr_ << "Omega";
+                }
+                void operator()(Nul const&){
+                        ostr_ << "Nul";
+                }
+                void operator()(Not const& obj){
+                        ostr_ << "Not{";
+                        boost::apply_visitor(*this, obj.child);
+                        ostr_ << "}";
+                }
+                void operator()(Union const& obj){
+                        ostr_ << "Union{";
+                        for(size_t idx=0;idx!=obj.children.size();++idx){
+                                if( idx != 0 )
+                                        ostr_ << ", ";
+                                boost::apply_visitor(*this, obj.children[idx]);
+                        }
+                        ostr_ << "}";
+                }
+                void operator()(Intersection const& obj){
+                        ostr_ << "Intersection{";
+                        for(size_t idx=0;idx!=obj.children.size();++idx){
+                                if( idx != 0 )
+                                        ostr_ << ", ";
+                                boost::apply_visitor(*this, obj.children[idx]);
+                        }
+                        ostr_ << "}";
+                }
+                void operator()(Interval const& i){
+                        ostr_ << ( i.left.is_open ? "(" : "[" );
+                        ostr_ << i.left.point;
+                        ostr_ << ",";
+                        ostr_ << i.right.point;
+                        ostr_ << ( i.right.is_open ? ")" : "]" );
+                }
+                std::stringstream ostr_;
+        };
+        ToStringImpl impl;
+        boost::apply_visitor(impl, b);
+        return impl.ostr_.str();
+}
+
+void Display(BorelSet const& b){
+        std::cout << ToString(b) << "\n";
+}
+
+
 int main(){
-        example_0();
-        example_1();
-        example_2();
+
+        BorelSet b = Not{ Interval::Closed(0, 0.5) };
+        Display(b);
+        
+
+        //example_0();
+        //example_1();
+        //example_2();
+
+
 }
 
 
