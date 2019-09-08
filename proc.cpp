@@ -734,6 +734,11 @@ struct Intersection{
         std::vector<BorelSet> children;
 };
 struct IntervalEndPoint{
+        friend std::ostream& operator<<(std::ostream& ostr, IntervalEndPoint const& self){
+                ostr << "IntervalEndPoint{is_open = " << self.is_open;
+                ostr << ", point = " << self.point << "}";
+                return ostr;
+        }
         bool is_open;
         double point;
 
@@ -896,6 +901,7 @@ Union ToIntervals(BorelSet const& b){
                                 return l->left.is_open < r->left.is_open;
                         });
 
+                        std::cout << "subs.size() = " << subs.size() << "\n";
                         Union result;
                         size_t iter = 0;
                         for(;iter!=subs.size();++iter){
@@ -910,8 +916,7 @@ Union ToIntervals(BorelSet const& b){
                                 IntervalEndPoint right = subs[iter]->right;
                                 // what is the largest path we can construct
                                 subs[iter] = 0;
-                                ++iter;
-                                for(size_t j=iter;j!=subs.size();){
+                                for(size_t j=iter+1;j!=subs.size();){
                                         if( subs[j] == 0 ){
                                                 ++j;
                                                 continue;
@@ -929,7 +934,7 @@ Union ToIntervals(BorelSet const& b){
                                                         dbg_path.push_back(head);
                                                         // restart nice and slow
                                                         std::cout << "iter = " << iter << "\n";
-                                                        j = iter;
+                                                        j = iter+1;
                                                         continue;
                                                 }
                                         }
@@ -937,10 +942,11 @@ Union ToIntervals(BorelSet const& b){
                                 }
                                 Interval i{left, right};
 
-                                for(size_t j=iter;j!=subs.size();++j){
+                                for(size_t j=iter+1;j!=subs.size();++j){
                                         if( subs[j] == 0 )
                                                 continue;
                                         if( subs[j]->IsSubsetOf(i) ){
+                                                std::cout << ToString(*subs[j]) << " \\subset " << ToString(i) << "\n";
                                                 subs[j] = 0;
                                         }
                                 }
@@ -957,8 +963,12 @@ Union ToIntervals(BorelSet const& b){
                         if( obj.children.empty() )
                                 return Union{};
                         Union mapped;
-                        for(auto const& _ : obj.children )
-                                mapped.children.push_back(boost::apply_visitor(*this,_));
+                        for(auto const& _ : obj.children ){
+                                for(auto const& inner : boost::apply_visitor(*this,_).children ){
+                                        mapped.children.push_back(inner);
+                                }
+                        }
+
 
                         auto first = boost::get<Interval>(&mapped.children[0]);
                         BOOST_ASSERT(first);
@@ -974,9 +984,26 @@ Union ToIntervals(BorelSet const& b){
                                 if( upper_left->point < ptr->left.point )
                                         upper_left = &ptr->left;
                                 else if(  upper_left->point == ptr->left.point && 
-                                          upper_left->is_open && 
-                                          ! ptr->left.is_open )
+                                          ! upper_left->is_open && 
+                                          ptr->left.is_open )
                                         upper_left = &ptr->left;
+                                
+                                if( lower_right->point > ptr->right.point )
+                                        lower_right = &ptr->right;
+                                else if(  lower_right->point == ptr->right.point && 
+                                          ! lower_right->is_open && 
+                                          ptr->right.is_open )
+                                        lower_right = &ptr->right;
+                                
+                        }
+
+                        std::cout << "*upper_left = " << *upper_left << "\n";
+                        std::cout << "*lower_right = " << *lower_right << "\n";
+
+                        if( upper_left->point <= lower_right->point ||
+                            ( upper_left->point == lower_right->point 
+                              && ! upper_left->is_open && ! lower_right->is_open ) ){
+                                return Union{ Interval{ *upper_left, *lower_right} };
                         }
 
                         return Union{};
@@ -993,8 +1020,9 @@ Union ToIntervals(BorelSet const& b){
 
 int main(){
 
-        BorelSet b = Union{ Interval{ Closed(0.0 ), Open(0.25) },
-                            Interval{ Closed(0.25), Open(0.50) } };
+        BorelSet b = Intersection{ Interval{ Closed(0.0 ), Closed(0.25) },
+                            Interval{ Open(0.25), Open(0.50) },
+                            Interval{ Closed(0.26), Closed(0.6) } };
         Display(b);
 
         
